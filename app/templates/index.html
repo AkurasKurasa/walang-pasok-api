@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% from "_macros.html" import scope, tags, proof_card, proof_toggle %}
+{% block title %}{% if location %}{{ location.name }}: may pasok ba bukas?{% else %}May pasok ba bukas?{% endif %} | Walang Pasok{% endblock %}
+{% block content %}
+{# Keeps ?date= on every link while looking at another day. #}
+{% set dq = ('date=' ~ today.isoformat() ~ '&') if archive else '' %}
+
+{% if archive %}
+  <div class="wrap">
+    <p class="archive-bar">
+      <span class="mono-label">Looking back</span>
+      <strong>{{ today | longdate }}, {{ today.year }}</strong>
+      <span class="muted">“Ngayon” and “Bukas” below mean that day and the day after.</span>
+      <a href="/{% if location %}?q={{ location.slug }}{% endif %}">Back to today →</a>
+    </p>
+  </div>
+{% endif %}
+
+{# ---------- Hero ---------- #}
+<section class="wrap hero">
+  <div class="hero-copy">
+    <span class="ink-blob ink-blob-pink halftone-pink" aria-hidden="true"></span>
+    <span class="ink-blob ink-blob-yellow" aria-hidden="true"></span>
+    <div class="hero-text">
+      <p class="eyebrow">May pasok ba bukas?</p>
+      <h1 class="hero-title"><span class="t-blue">Class</span> <span class="t-pink">dismissed?</span></h1>
+      <p class="lede">Every LGU and DepEd suspension, checked against its source and posted in one place. Find out if may pasok bukas before the group chat does.</p>
+    </div>
+  </div>
+
+  <div class="slip-wrap">
+    <div class="slip{% if days %} panel {{ 'panel-off' if days[0][2].suspended else 'panel-on' }}{% endif %}">
+      <div class="slip-top">
+        <span>Admit slip{% if location %} · No. {{ location.psgc_code }}{% endif %}</span>
+        <span>{{ today | shortdate }}{% if archive %}, {{ today.year }}{% endif %}</span>
+      </div>
+
+      <form class="slip-form" action="/" method="get" role="search">
+        {% if archive %}<input type="hidden" name="date" value="{{ today.isoformat() }}">{% endif %}
+        <label for="q" class="mono-label">City or municipality</label>
+        <div class="slip-search">
+          {# Picking a place submits right away; the button covers browsers without JavaScript. #}
+          <select id="q" name="q" required onchange="this.form.submit()">
+            <option value="" disabled {{ 'selected' if not location }}>Choose your city or municipality</option>
+            {% for province, places in locality_groups %}
+              <optgroup label="{{ province }}">
+                {% for loc in places %}
+                  <option value="{{ loc.slug }}" {{ 'selected' if location and location.id == loc.id }}>{{ loc.name }}</option>
+                {% endfor %}
+              </optgroup>
+            {% endfor %}
+          </select>
+          <button type="submit" aria-label="Check">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+          </button>
+        </div>
+      </form>
+      <datalist id="localities">
+        {% for loc in localities %}<option value="{{ loc.name }}">{% endfor %}
+      </datalist>
+
+      <div class="slip-body">
+        {% if query and not location %}
+          <div class="message">
+            {% if choices %}
+              <p><strong>Several places match "{{ query }}".</strong> Which one did you mean?</p>
+              <ul class="choices">
+                {% for c in choices %}
+                  <li><a href="/?{{ dq }}q={{ c.slug }}">{{ c.name }}</a> <span class="muted">{{ c.province or c.region }}</span></li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p><strong>We couldn't find "{{ query }}".</strong> Check the spelling, or try the full name, like "Quezon City".</p>
+            {% endif %}
+          </div>
+        {% elif location %}
+          {% set _, tomorrow, outlook = days[0] %}
+          <p class="panel-place">{{ location.name }}{% if location.province %}, {{ location.province }}{% endif %}</p>
+          <h2 class="panel-title {{ 't-pink' if outlook.suspended else 't-ink' }}">{{ 'Walang pasok bukas' if outlook.suspended else 'May pasok bukas' }}</h2>
+
+          <div class="slip-days">
+            {% for label, day, result in days | reverse %}
+              <div class="slip-day{% if result.suspended %} is-off{% endif %}">
+                {% if result.suspended %}<span class="halftone-pink slip-day-ink" aria-hidden="true"></span>{% endif %}
+                <span class="mono-label">{{ label }} · {{ day | shortdate }}</span>
+                <span class="slip-day-status">{{ 'Walang pasok' if result.suspended else 'May pasok' }}</span>
+                {% if not result.suspended %}<span class="slip-day-note">No suspension announced</span>{% endif %}
+              </div>
+            {% endfor %}
+          </div>
+
+          {% if featured %}
+            {% for s in featured %}
+              <dl class="slip-facts">
+                <dt>Levels</dt><dd>{{ s.levels | map("label") | join(", ") }}</dd>
+                <dt>Schools</dt><dd>{{ s.school_type | label }}</dd>
+                {% if s.mode != "all_classes" or s.time_scope != "whole_day" or s.until_lifted %}
+                  <dt>Scope</dt><dd>{{ tags(s) }}</dd>
+                {% endif %}
+                <dt>Why</dt><dd>{{ s.reason_detail or (s.reason | label) }}{% if s.location_id != location.id %} <span class="muted">(declared for all of {{ s.location.name }})</span>{% endif %}</dd>
+                <dt>Source</dt><dd class="verified">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+                  Verified, {{ s.proof | length }} source{{ 's' if s.proof | length != 1 }}
+                </dd>
+              </dl>
+            {% endfor %}
+            {{ proof_toggle(featured) }}
+          {% else %}
+            <p class="slip-note">Announcements usually come the night before or early in the morning. Check again later, or <a href="#alerts">get a Discord alert</a>.</p>
+          {% endif %}
+        {% else %}
+          <p class="slip-note">Type your city to get your admit slip for today and bukas.</p>
+          <p class="popular"><span class="mono-label">Popular</span>
+            <a href="/?{{ dq }}q=angeles-city">Angeles City</a>
+            <a href="/?{{ dq }}q=mabalacat-city">Mabalacat</a>
+            <a href="/?{{ dq }}q=san-fernando-pampanga">San Fernando</a>
+            <a href="/?{{ dq }}q=quezon-city">Quezon City</a>
+          </p>
+        {% endif %}
+      </div>
+      <div class="slip-tear" aria-hidden="true"></div>
+    </div>
+    {% if location and days[0][2].suspended %}
+      <div class="stamp" aria-hidden="true">Excused<br>by LGU<br>★</div>
+    {% endif %}
+  </div>
+</section>
+
+{# ---------- Weekly timetable ---------- #}
+<section id="week" class="wrap section">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Period 1 · Your week</p>
+      <h2 class="section-title">Timetable{% if location %}, {{ location.name }}{% endif %}</h2>
+    </div>
+    {% if location %}<a class="mono-link" href="/#q">Change city →</a>{% endif %}
+  </div>
+
+  {% if week %}
+    <div class="scroll-x">
+      <table class="timetable">
+        <caption class="sr-only">Classes in {{ location.name }} for the next six school days</caption>
+        <thead>
+          <tr>
+            <td></td>
+            {% for d in week.days %}
+              <th scope="col">{{ d.date | dayname }}{% if d.tag %} <span class="day-tag">{{ d.tag }}</span>{% endif %}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in week.rows %}
+            <tr>
+              <th scope="row">{{ row.label }}</th>
+              {% for c in row.cells %}
+                <td class="tt-cell tt-{{ c.state }}">
+                  <span class="tt-sub">{{ c.sub }}</span>
+                  <span class="tt-label">{{ c.label }}</span>
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <ul class="legend">
+      <li><span class="swatch swatch-off" aria-hidden="true"></span>Suspended</li>
+      <li><span class="swatch swatch-partial" aria-hidden="true"></span>Partial (online or half day)</li>
+      <li><span class="swatch swatch-class" aria-hidden="true"></span>Regular class</li>
+    </ul>
+  {% else %}
+    <p class="empty">Search for your city above to see which grades have class on each of the next six school days.</p>
+  {% endif %}
+</section>
+
+{# ---------- Roll call ---------- #}
+<section id="roster" class="wrap section">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Period 2 · Nationwide</p>
+      <h2 class="section-title">Walang pasok {{ 'that day' if archive else 'ngayon' }}</h2>
+      <p class="muted">{{ 'The' if archive else 'Today’s' }} roll call: verified suspensions for {{ today | longdate }}{% if archive %}, {{ today.year }}{% endif %}.</p>
+    </div>
+    <nav class="chips" aria-label="Filter by island group">
+      {% set q_part = dq ~ (('q=' ~ (query | urlencode) ~ '&') if query else '') %}
+      <a class="pill{% if not island %} is-on{% endif %}" href="/?{{ q_part }}#roster"{% if not island %} aria-current="true"{% endif %}>All</a>
+      {% for name in ["luzon", "visayas", "mindanao"] %}
+        <a class="pill{% if island == name %} is-on{% endif %}" href="/?{{ q_part }}island={{ name }}#roster"{% if island == name %} aria-current="true"{% endif %}>{{ name | title }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+
+  {% if nationwide %}
+    <div class="scroll-x roster-box">
+      <div class="roster">
+        <div class="roster-row roster-head" aria-hidden="true">
+          <span>#</span><span>City / Municipality</span><span>Levels</span>
+          <span class="c">Public</span><span class="c">Private</span><span>Note</span><span>Proof</span>
+        </div>
+        {% for s in nationwide %}
+          <details class="roster-item">
+            <summary class="roster-row">
+              <span class="roster-no">{{ '%02d' % loop.index }}</span>
+              {% set area = s.location.province or s.location.region %}
+              <span><strong>{{ s.location.name }}</strong>{% if area != s.location.name %} <span class="muted">{{ area }}</span>{% endif %}
+                <span class="roster-why">{{ s.reason_detail or (s.reason | label) }}</span></span>
+              <span>{{ s.levels | map("label") | join(", ") }}</span>
+              <span class="c"><span class="dot{% if s.school_type != 'private' %} is-on{% endif %}" role="img" aria-label="Public schools: {{ 'suspended' if s.school_type != 'private' else 'have class' }}"></span></span>
+              <span class="c"><span class="dot{% if s.school_type != 'public' %} is-on{% endif %}" role="img" aria-label="Private schools: {{ 'suspended' if s.school_type != 'public' else 'have class' }}"></span></span>
+              <span class="roster-note">{{ tags(s) }}</span>
+              <span><span class="pill"><span class="when-closed">Show</span><span class="when-open">Hide</span></span></span>
+            </summary>
+            <div class="roster-proof">
+              {% for p in s.proof %}{{ proof_card(p) }}{% endfor %}
+            </div>
+          </details>
+        {% endfor %}
+      </div>
+    </div>
+    {% if nationwide_total > nationwide | length and not island %}
+      <p><a href="/api/v1/suspensions/today?size=100">See all {{ nationwide_total }} in the API</a></p>
+    {% endif %}
+  {% elif island %}
+    <p class="empty">No verified suspensions in {{ island | title }} {{ 'that day' if archive else 'today' }}.</p>
+  {% else %}
+    <div class="empty">
+      <p>{{ 'No verified suspensions that day.' if archive else 'No verified suspensions today.' }}</p>
+      {% if recent_days %}
+        <p class="recent-days"><span class="mono-label">Recent days with suspensions</span>
+          {% for day, count in recent_days %}
+            <a class="pill" href="/?date={{ day.isoformat() }}#roster">{{ day | shortdate }}, {{ day.year }} · {{ count }}</a>
+          {% endfor %}
+        </p>
+      {% endif %}
+    </div>
+  {% endif %}
+</section>
+
+{# ---------- API worksheet ---------- #}
+<section id="api" class="wrap section">
+  <div class="worksheet">
+    <span class="ink-blob ink-blob-ws-pink" aria-hidden="true"></span>
+    <span class="ink-blob ink-blob-ws-yellow" aria-hidden="true"></span>
+    <div class="worksheet-copy">
+      <p class="eyebrow eyebrow-yellow">Worksheet · Exercise 1</p>
+      <h2 class="section-title">Ask the API. Show your work.</h2>
+      <p>One request answers “is there class?” for any city, with the proof attached. Build a Discord bot, a school site widget, or a reminder for your block’s GC.</p>
+      <div class="btn-row">
+        <a class="btn btn-white" href="/docs">Read the docs</a>
+        <a class="btn btn-outline" href="/redoc">API reference</a>
+      </div>
+    </div>
+    <pre class="worksheet-code"><code><span class="t-pink">GET /api/v1/check?location=angeles-city</span>
+{
+  "suspended": true,
+  "date": "{{ today.isoformat() }}",
+  "details": [{
+    "levels": ["all"],
+    "school_type": "both",
+    "proof": [{ "kind": "facebook_post", ... }]
+  }]
+}</code></pre>
+  </div>
+</section>
+
+{# ---------- Alerts ---------- #}
+<section id="alerts" class="wrap section">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Period 3 · The bell</p>
+      <h2 class="section-title">Get alerts</h2>
+      <p class="muted">Ring your Discord server the moment a suspension is verified, with the proof attached.</p>
+    </div>
+  </div>
+  <div class="alerts">
+    <form class="alerts-form" action="/alerts" method="post">
+      <label for="webhook_url" class="mono-label">Discord webhook URL</label>
+      <input id="webhook_url" name="webhook_url" type="url" required placeholder="https://discord.com/api/webhooks/…" autocomplete="off">
+      <label for="alert_location" class="mono-label">Place to follow <span class="muted">(blank for nationwide)</span></label>
+      <input id="alert_location" name="location" list="localities" placeholder="e.g. Angeles City" autocomplete="off" value="{{ location.name if location else '' }}">
+      <label for="label" class="mono-label">Name <span class="muted">(optional)</span></label>
+      <input id="label" name="label" maxlength="120" placeholder="e.g. AUF CCS Discord">
+      <button type="submit" class="btn btn-blue">Ring my server</button>
+    </form>
+    <ol class="how-to">
+      <li><strong>Open your Discord server settings.</strong> Go to Integrations, then Webhooks.</li>
+      <li><strong>Create a webhook</strong> for the channel that should get alerts, then click Copy Webhook URL.</li>
+      <li><strong>Paste it here.</strong> We’ll post a test message right away, and an alert each time a suspension is verified.</li>
+      {% if facebook_page_url %}
+        <li><strong>Not on Discord?</strong> <a href="{{ facebook_page_url }}" rel="noopener" target="_blank">Follow our Facebook Page</a> for the same alerts.</li>
+      {% endif %}
+    </ol>
+  </div>
+</section>
+{% endblock %}

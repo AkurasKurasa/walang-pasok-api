@@ -1,0 +1,48 @@
+{# Scope of a suspension in one line, e.g. "All levels; public & private; afternoon only". #}
+{% macro scope(s) -%}
+{{ s.levels | map("label") | join(", ") }}; {{ s.school_type | label | lower }}
+{%- if s.time_scope != "whole_day" %}; {{ s.time_scope | label | lower }}{% endif %}
+{%- if s.mode != "all_classes" %}; {{ s.mode | label | lower }}{% endif %}
+{%- if s.until_lifted %}; until lifted (since {{ s.date | shortdate }}){% endif %}
+{%- endmacro %}
+
+{# Short tags for the roll call's Note column. #}
+{% macro tags(s) -%}
+{%- set out = [] -%}
+{%- if s.mode == "face_to_face_only" %}{% set _ = out.append("Face-to-face only") %}{% endif -%}
+{%- if s.time_scope == "afternoon" %}{% set _ = out.append("Afternoon only") %}{% endif -%}
+{%- if s.time_scope == "morning" %}{% set _ = out.append("Morning only") %}{% endif -%}
+{%- if s.school_type == "public" %}{% set _ = out.append("Public only") %}{% endif -%}
+{%- if s.school_type == "private" %}{% set _ = out.append("Private only") %}{% endif -%}
+{%- if s.until_lifted %}{% set _ = out.append("Until lifted") %}{% endif -%}
+{{ out | join(" · ") if out else "—" }}
+{%- endmacro %}
+
+{# One source card: who posted it, when, the quoted text and a link to the original. #}
+{% macro proof_card(p) %}
+<article class="proof-card{% if p.primary %} proof-primary{% endif %}">
+  <div class="proof-head">
+    <span class="proof-avatar proof-{{ p.kind }}" aria-hidden="true">{{ p.name | initials }}</span>
+    <div class="proof-who">
+      <span class="proof-name">{{ p.name }}</span>
+      <span class="proof-meta">{{ p.kind | label }}{% if p.posted_at %} · Posted {{ p.posted_at | posted }}{% endif %}{% if p.primary and p.kind == 'official_website' %} · Official source{% elif p.primary %} · First report{% endif %}</span>
+    </div>
+  </div>
+  {% if p.excerpt %}
+    <blockquote class="proof-quote">“{{ p.excerpt }}”</blockquote>
+  {% endif %}
+  <a class="proof-link" href="{{ p.url }}" rel="nofollow noopener" target="_blank">{{ link_text(p.kind) }} →</a>
+</article>
+{% endmacro %}
+
+{# The Show / Hide proof toggle. <details> needs no JavaScript and works with a keyboard. #}
+{% macro proof_toggle(suspensions, label="proof") %}
+<details class="proof">
+  <summary class="pill"><span class="when-closed">Show {{ label }}</span><span class="when-open">Hide {{ label }}</span></summary>
+  <div class="proof-list">
+    {% for s in suspensions %}
+      {% for p in s.proof %}{{ proof_card(p) }}{% endfor %}
+    {% endfor %}
+  </div>
+</details>
+{% endmacro %}

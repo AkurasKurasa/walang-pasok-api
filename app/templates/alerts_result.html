@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Alerts | Walang Pasok{% endblock %}
+{% block content %}
+<section class="wrap section result-page">
+  {% if error %}
+    <p class="eyebrow">Try again</p>
+    <h1 class="section-title">That didn’t work</h1>
+    <p class="message">{{ error }}</p>
+    <p><a class="btn btn-blue" href="/#alerts">Back to the form</a></p>
+  {% elif turned_off %}
+    <p class="eyebrow">Done</p>
+    <h1 class="section-title">Alert turned off</h1>
+    <p>That channel won’t get any more messages from us.</p>
+    <p><a class="btn btn-blue" href="/">Back home</a></p>
+  {% else %}
+    <p class="eyebrow">You’re on the list</p>
+    <h1 class="section-title">Ring ring!</h1>
+    <p>Your Discord channel will get alerts for <strong>{{ sub.location.name if sub.location else "the whole Philippines" }}</strong>. We just posted a test message there.</p>
+    <div class="token-box">
+      <p class="mono-label">Your manage code. Save it now: it’s shown only once.</p>
+      <code>{{ sub.manage_token }}</code>
+      <p class="muted">You need it to turn the alert off. Deleting the webhook in Discord also stops it.</p>
+    </div>
+    <p><a class="btn btn-blue" href="/">Back home</a></p>
+  {% endif %}
+
+  <form class="alerts-off" action="/alerts/off" method="post">
+    <label for="token" class="mono-label">Turn an alert off</label>
+    <div class="slip-search">
+      <input id="token" name="token" required placeholder="Paste your manage code" autocomplete="off">
+      <button type="submit" class="btn btn-outline-blue">Turn off</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

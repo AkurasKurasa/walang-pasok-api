@@ -1,0 +1,21 @@
+# Render Blueprint: deploys the website + API on Render's free plan using the Dockerfile
+# (which runs database migrations on start and listens on $PORT).
+# In Render: New > Blueprint > pick this repo. It asks for the values marked sync: false.
+services:
+  - type: web
+    name: walang-pasok
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL          # your Neon connection string (same as the GitHub secret)
+        sync: false
+      - key: PUBLIC_BASE_URL       # this site's address, e.g. https://walang-pasok.onrender.com
+        sync: false
+      - key: ADMIN_API_KEY         # random admin key, generated for you; see it in Render > Environment
+        generateValue: true
+      - key: TIMEZONE
+        value: Asia/Manila
+      - key: APP_ENV
+        value: production

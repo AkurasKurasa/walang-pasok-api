@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: walang_pasok
+      POSTGRES_PASSWORD: walang_pasok
+      POSTGRES_DB: walang_pasok
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U walang_pasok -d walang_pasok"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # Optional: run the API in a container too (`docker compose --profile app up`).
+  api:
+    profiles: ["app"]
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://walang_pasok:walang_pasok@db:5432/walang_pasok
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
