@@ -1,4 +1,4 @@
-"""Seed locations (Pampanga + Metro Manila) and real example suspensions.
+"""Seed every PSGC location (all regions, provinces, cities, municipalities) and real example suspensions.
 
     python -m scripts.seed             # upsert locations; import the real examples
     python -m scripts.seed --samples   # also add fictional samples dated today/tomorrow
@@ -40,7 +40,7 @@ from app.models import (
     TimeScope,
 )
 from app.schemas.suspension import SuspensionCreate
-from app.services import clock, importer
+from app.services import clock, importer, psgc
 from app.services import suspensions as suspension_service
 from scripts.real_examples import ANNOUNCEMENTS, ARTICLES
 
@@ -120,18 +120,25 @@ LOCATIONS: list[Loc] = [
 
 
 def upsert_locations(db: Session) -> int:
-    by_slug: dict[str, Location] = {}
-    for data in LOCATIONS:
-        loc = db.scalar(select(Location).where(Location.psgc_code == data.psgc_code))
+    """Every region, province, city and municipality from the PSGC snapshot.
+
+    The hand-written LOCATIONS above keep their names and slugs, so existing
+    links (/?q=angeles-city) keep working.
+    """
+    overrides = {loc.psgc_code: (loc.name, loc.slug) for loc in LOCATIONS}
+    existing = {loc.psgc_code: loc for loc in db.scalars(select(Location))}
+    by_code: dict[str, Location] = {}
+    for row in psgc.build(psgc.load(), overrides):
+        loc = existing.get(row.psgc_code)
         if loc is None:
-            loc = Location(psgc_code=data.psgc_code)
+            loc = Location(psgc_code=row.psgc_code)
             db.add(loc)
-        loc.name, loc.slug, loc.type = data.name, data.slug, data.type
-        loc.region, loc.province = data.region, data.province
-        loc.parent = by_slug[data.parent_slug] if data.parent_slug else None
-        by_slug[data.slug] = loc
+        loc.name, loc.slug, loc.type = row.name, row.slug, row.type
+        loc.region, loc.province = row.region, row.province
+        loc.parent = by_code[row.parent_code] if row.parent_code else None
+        by_code[row.psgc_code] = loc
     db.commit()
-    return len(by_slug)
+    return len(by_code)
 
 
 def sample_suspensions(db: Session, today: dt.date) -> list[Suspension]:
@@ -239,7 +246,12 @@ def main() -> None:
     parser.add_argument("--samples", action="store_true", help="also add fictional samples dated today/tomorrow")
     parser.add_argument("--locations-only", action="store_true",
                         help="only add/update the places (what the watcher runs before each check)")
+    parser.add_argument("--refresh-psgc", action="store_true",
+                        help="download the latest PSGC list into app/data/psgc first")
     args = parser.parse_args()
+
+    if args.refresh_psgc:
+        print(f"PSGC snapshot refreshed: {psgc.download()}")
 
     with SessionLocal() as db:
         print(f"Locations upserted: {upsert_locations(db)}")

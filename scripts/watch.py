@@ -1,11 +1,14 @@
-"""Check suspension news pages and import anything new as pending.
+"""One hands-off cycle: check the news, publish well-sourced finds, send alerts.
 
-    python -m scripts.watch                 # one run (what GitHub Actions does)
-    python -m scripts.watch --loop          # keep running, every 15 minutes (for your laptop)
+    python -m scripts.watch                 # one cycle (what GitHub Actions runs on a schedule)
     python -m scripts.watch --ping https://your-site.onrender.com   # also wake the website
 
-New suspensions are saved as *pending* and reported to ADMIN_DISCORD_WEBHOOK_URL.
-Nothing is public until someone verifies it.
+You normally don't run this yourself: the web app runs the same cycle every
+WATCH_INTERVAL_MINUTES, and GitHub Actions runs it in production.
+
+Finds that link to the LGU's own post, or that 2+ outlets report, are published
+and alerted automatically. The rest stay pending and are listed in
+ADMIN_DISCORD_WEBHOOK_URL for a person. See app/services/autopilot.py.
 """
 
 import argparse
@@ -14,8 +17,7 @@ import sys
 import time
 import urllib.request
 
-from app.db import SessionLocal
-from app.services import watcher
+from app.services import autopilot, watcher
 
 
 def ping(url: str) -> None:
@@ -31,14 +33,18 @@ def ping(url: str) -> None:
 def run(ping_url: str | None) -> int:
     if ping_url:
         ping(ping_url)
-    with SessionLocal() as db:
-        report = watcher.run_once(db, watcher.PoliteFetcher())
+    cycle = autopilot.run_cycle()
+    report = cycle.watch
 
     for a in report.articles:
         when = f" [{a.date}]" if a.date else ""
         print(f"{a.status:10} {a.title[:70] or a.url}{when}")
         for c in a.items:
             flag = f"  ⚠ {' '.join(c.notes)}" if c.notes else ""
+            if c.suspension_id in cycle.published:
+                flag += f"  -> PUBLISHED ({cycle.published[c.suspension_id]})"
+            elif c.suspension_id in cycle.held:
+                flag += f"  -> needs review ({cycle.held[c.suspension_id]})"
             print(f"           {c.action:14} #{c.suspension_id} {c.location.name}: {c.line[:90]}{flag}")
         for line in a.unmatched:
             print(f"           unknown place  {line[:100]}")
@@ -47,9 +53,10 @@ def run(ping_url: str | None) -> int:
     for error in report.errors:
         print(f"ERROR {error}")
 
-    print(f"\n{len(report.new_items)} new pending, {len(report.new_proof)} new proof added.")
-    if watcher.notify_admin(report):
-        print("Reported to the admin Discord channel.")
+    print(f"\n{len(report.new_items)} new, {len(report.new_proof)} new proof added, "
+          f"{len(cycle.published)} published automatically, {len(cycle.held)} waiting for review.")
+    if cycle.alerts:
+        print(f"Alerts: {cycle.alerts.sent} sent, {cycle.alerts.failed} failed.")
     # Fail the run (red X in GitHub Actions) only if no source could be read at all.
     return 1 if report.errors and not report.articles else 0
 

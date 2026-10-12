@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{# The static site's API page (GitHub Pages has no server, so no Swagger UI). #}
+{% block title %}API | Walang Pasok{% endblock %}
+{% block content %}
+<section class="wrap section">
+  <p class="eyebrow">For developers</p>
+  <h1 class="section-title">The Walang Pasok API</h1>
+  <p class="lede">Plain JSON files, rebuilt every time the news is checked. No key, no sign-up. Fetch them from a Discord bot, a school website or a spreadsheet.</p>
+
+  <h2 class="section-title">Is there class today?</h2>
+  <pre class="worksheet-code"><code>GET {{ site_url }}/api/v1/check/{{ example }}.json
+GET {{ site_url }}/api/v1/check/{{ example }}/tomorrow.json</code></pre>
+  <p><code>suspended</code> is <code>true</code> or <code>false</code>. <code>details</code> lists each verified suspension that covers the place, including ones declared for its province or region, and <code>sources</code> links to the proof. Find a place's slug in <a href="{{ url('/api/v1/locations.json') }}">locations.json</a>.</p>
+
+  <h2 class="section-title">All files</h2>
+  <table class="timetable">
+    <thead><tr><th scope="col">File</th><th scope="col">What it holds</th></tr></thead>
+    <tbody>
+      <tr><td><a href="{{ url('/api/v1/check/' ~ example ~ '.json') }}">/api/v1/check/&lt;slug&gt;.json</a></td><td>Today ({{ today | longdate }}, Asia/Manila) for one city or municipality</td></tr>
+      <tr><td><a href="{{ url('/api/v1/check/' ~ example ~ '/tomorrow.json') }}">/api/v1/check/&lt;slug&gt;/tomorrow.json</a></td><td>Tomorrow for one place</td></tr>
+      <tr><td><a href="{{ url('/api/v1/suspensions/today.json') }}">/api/v1/suspensions/today.json</a></td><td>Today's verified suspensions nationwide</td></tr>
+      <tr><td><a href="{{ url('/api/v1/suspensions.json') }}">/api/v1/suspensions.json</a></td><td>The latest 100 verified suspensions, newest first</td></tr>
+      <tr><td><a href="{{ url('/api/v1/locations.json') }}">/api/v1/locations.json</a></td><td>Every region, province, city and municipality (PSGC), with slugs</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="section-title">Example</h2>
+  <pre class="worksheet-code"><code>curl {{ site_url }}/api/v1/check/{{ example }}.json
+
+// JavaScript
+const r = await fetch("{{ site_url }}/api/v1/check/{{ example }}.json");
+const { suspended, details } = await r.json();</code></pre>
+
+  <p class="muted">Data comes from LGU announcements and news reports, checked every 15 minutes. Only verified suspensions are included. Updated {{ updated }}. The full server version (filters like <code>?level=college</code>, Discord alerts) is in the <a href="https://github.com/AkurasKurasa/walang-pasok-api">source code</a>.</p>
+</section>
+{% endblock %}

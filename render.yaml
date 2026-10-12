@@ -19,3 +19,5 @@ services:
         value: Asia/Manila
       - key: APP_ENV
         value: production
+      - key: WATCHER_ENABLED       # GitHub Actions (watch.yml) runs the watcher; don't run it twice
+        value: "false"

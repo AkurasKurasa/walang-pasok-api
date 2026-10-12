@@ -19,6 +19,7 @@ requests and only fetches a handful of articles per source per run.
 
 import datetime as dt
 import hashlib
+import json
 import logging
 import re
 import time
@@ -52,12 +53,17 @@ class WatchSource:
     link_pattern: str  # regex an article URL must match
     link_text_pattern: str = r"pasok|suspen|no classes|class(?:es)? cancel"
     kind: SourceKind = SourceKind.NEWS_ARTICLE
-    # id of the element holding the article body, so sidebars are ignored
+    # The element holding the article body, so sidebars are ignored: an id, or
+    # "[attr=value]" such as "[itemprop=articleBody]".
     content_id: str | None = None
+    # Read the body from the page's schema.org NewsArticle data (JSON-LD
+    # "articleBody"), for sites that fill the visible article in with JavaScript.
+    ld_json_body: bool = False
 
 
-# Add sources here. Before adding one, check that its article list is in the
-# page's HTML (not loaded by JavaScript) and that its robots.txt allows it.
+# Add sources here. Before adding one, check that its robots.txt allows it and
+# that the article text is in the HTML (or its JSON-LD), not loaded by JavaScript.
+# Sites that refuse automated readers (403, or robots.txt) are left out on purpose.
 SOURCES: list[WatchSource] = [
     WatchSource(
         name="Inquirer.net",
@@ -66,7 +72,46 @@ SOURCES: list[WatchSource] = [
         link_pattern=r"^https://newsinfo\.inquirer\.net/\d+/[\w-]+/?$",
         content_id="article_content",
     ),
+    WatchSource(
+        name="GMA News",
+        # Serbisyo Publiko feed; its "WALANG PASOK" lists link each place to the LGU's own post.
+        index_url="https://data.gmanetwork.com/gno/rss/serbisyopubliko/feed.xml",
+        link_pattern=r"^https://www\.gmanetwork\.com/news/serbisyopubliko/walangpasok/\d+/[\w-]+/story/?$",
+        ld_json_body=True,
+    ),
+    WatchSource(
+        name="Guro Tayo",
+        # A teachers' site that rounds up LGU and DepEd announcements, with links to each post.
+        index_url="https://www.gurotayo.com/feeds/posts/default?alt=rss&max-results=25",
+        link_pattern=r"^https://www\.gurotayo\.com/\d{4}/\d{2}/[\w-]+\.html$",
+        link_text_pattern=r"pasok|suspen",
+        content_id="[itemprop=articleBody]",
+    ),
 ]
+
+
+def ld_json_article_body(html: str) -> str | None:
+    """The `articleBody` of a page's schema.org NewsArticle JSON-LD, if any."""
+    for block in re.findall(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', html, re.S | re.I):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        for item in data if isinstance(data, list) else [data]:
+            if isinstance(item, dict) and isinstance(item.get("articleBody"), str):
+                return item["articleBody"]
+    return None
+
+
+def read_article(html: str, source: WatchSource) -> importer.Page:
+    """The article's title, body text and links, without sidebars."""
+    if source.ld_json_body:
+        body = ld_json_article_body(html)
+        if body:
+            page = importer.html_to_page(body)
+            page.title = importer.html_to_page(html).title
+            return page
+    return importer.html_to_page(html, source.content_id)
 
 
 @dataclass
@@ -184,6 +229,7 @@ class WatchReport:
     articles: list[ArticleReport] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     withdrawn: list[Withdrawn] = field(default_factory=list)
+    unreadable: list[ArticleReport] = field(default_factory=list)  # current lists we couldn't open
 
     @property
     def new_items(self) -> list[importer.Candidate]:
@@ -236,9 +282,15 @@ def run_once(
             url = listing.url
             seen = db.scalar(select(WatchedPage).where(WatchedPage.url == url))
             try:
-                page = importer.html_to_page(fetch(url), source.content_id)
+                page = read_article(fetch(url), source)
             except FetchError as exc:
-                report.articles.append(ArticleReport(url, listing.title, None, "error", error=str(exc)))
+                near = listing.published.date() if listing.published else today
+                day = headline_date(importer.Page(listing.title, "", []), near)
+                report.articles.append(ArticleReport(url, listing.title, day, "error", error=str(exc)))
+                if day is not None and day >= today:
+                    # A current list we couldn't read (e.g. the site blocks robots): a person
+                    # must check it, or its places are silently missed.
+                    report.unreadable.append(ArticleReport(url, listing.title, day, "error", error=str(exc)))
                 if seen:
                     seen.last_error, seen.last_checked_at = str(exc)[:1000], clock.now()
                 continue
@@ -270,6 +322,15 @@ def run_once(
                 importer.parse_reason(title, Reason.WEATHER),
                 importer.article_mode(title, "\n".join(page.text.splitlines()[:30])),
             )
+            if not result.candidates:
+                # Roundups written as numbered sections with a paragraph each (Guro Tayo).
+                sections = importer.parse_sections(
+                    index, page.text, day, importer.parse_reason(title, Reason.WEATHER),
+                    importer.article_mode(title),
+                )
+                if sections.candidates or sections.unmatched:
+                    result = sections
+            importer.attach_official_links(result, page.links)
             posted = listing.published
             importer.import_parsed(
                 db, result, day, importer.SourceInfo(url=url, name=source.name, kind=source.kind, posted_at=posted)
@@ -293,18 +354,38 @@ def run_once(
 # --- Telling the admin -------------------------------------------------------
 
 
-def admin_summary(report: WatchReport, settings: Settings) -> dict | None:
-    """A Discord message listing new pending suspensions, or None if there's nothing new."""
+def admin_summary(
+    report: WatchReport,
+    settings: Settings,
+    published: dict[int, str] | None = None,
+    held: dict[int, str] | None = None,
+) -> dict | None:
+    """A Discord message about new finds, or None if there's nothing new.
+
+    `published` / `held` (suspension id -> reason) come from the autopilot: what
+    went live on its own, and what still needs a person.
+    """
+    published, held = published or {}, held or {}
     new, proof, gone = report.new_items, report.new_proof, report.withdrawn
-    if not new and not proof and not gone:
+    blocked = report.unreadable
+    if not new and not proof and not gone and not published and not blocked:
         return None
     base = settings.public_base_url.rstrip("/")
     lines = []
     for c in new[:20]:
         note = f" ⚠ {' '.join(c.notes)}" if c.notes else ""
-        lines.append(f"• **#{c.suspension_id} {c.location.name}**: {c.line[:150]}{note}")
+        if c.suspension_id in published:
+            status = f"✅ published ({published[c.suspension_id]})"
+        elif c.suspension_id in held:
+            status = f"⏳ needs review ({held[c.suspension_id]})"
+        else:
+            status = ""
+        lines.append(f"• **#{c.suspension_id} {c.location.name}** {status}: {c.line[:150]}{note}")
     if len(new) > 20:
         lines.append(f"…and {len(new) - 20} more.")
+    later = [sid for sid in published if sid not in {c.suspension_id for c in new}]
+    if later:
+        lines.append(f"✅ Published after more proof came in: {', '.join(f'#{sid}' for sid in later)}")
     if proof:
         lines.append(f"Also added {len(proof)} news source(s) as proof to suspensions already on file.")
     for w in gone:
@@ -312,15 +393,30 @@ def admin_summary(report: WatchReport, settings: Settings) -> dict | None:
             f"⚠ **#{w.suspension_id} {w.location_name}** ({w.status.value}) is no longer listed in its "
             f"source, which was updated: {w.url} Check it, and correct it if the source was right."
         )
+    for a in blocked[:5]:
+        lines.append(
+            f"⚠ Couldn't read **{a.title[:100]}** ({a.date}): {a.url} Places it lists may be missing. "
+            "Check it and add them (POST /api/v1/suspensions or scripts.import_article --file)."
+        )
     lines.append(f"Review: {base}/docs#/suspensions (PATCH /api/v1/suspensions/{{id}}/verify)")
-    heading = f"**{len(new)} new pending suspension(s) found by the watcher**" if new else "**Watcher update**"
+    if new and published:
+        heading = f"**{len(new)} new suspension(s) found, {len(published)} published automatically**"
+    elif new:
+        heading = f"**{len(new)} new pending suspension(s) found by the watcher**"
+    else:
+        heading = "**Watcher update**"
     content = heading + "\n" + "\n".join(lines)
     return {"username": "Walang Pasok watcher", "allowed_mentions": {"parse": []}, "content": content[:1990]}
 
 
-def notify_admin(report: WatchReport, settings: Settings | None = None) -> bool:
+def notify_admin(
+    report: WatchReport,
+    settings: Settings | None = None,
+    published: dict[int, str] | None = None,
+    held: dict[int, str] | None = None,
+) -> bool:
     settings = settings or get_settings()
-    payload = admin_summary(report, settings)
+    payload = admin_summary(report, settings, published, held)
     if payload is None or not settings.admin_discord_webhook_url:
         return False
     result = notifications.post_json(settings.admin_discord_webhook_url, payload, settings.notify_timeout)

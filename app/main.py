@@ -1,3 +1,5 @@
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -8,9 +10,17 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app import __version__
 from app.api.v1 import router as api_v1_router
 from app.errors import register_error_handlers
+from app.services import autopilot
 from app.web.routes import router as web_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# Show the background watcher's progress in the server log.
+logging.getLogger("app").setLevel(logging.INFO)
+if not logging.getLogger("app").handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:     [%(name)s] %(message)s"))
+    logging.getLogger("app").addHandler(_handler)
 
 DESCRIPTION = """
 Public API for **class suspensions in the Philippines** ("walang pasok") due to
@@ -24,8 +34,18 @@ typhoons, floods, holidays and local events.
 """
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Hands-off mode: the news watcher runs alongside the website (see autopilot.py).
+    worker = autopilot.start_background()
+    yield
+    if worker is not None:
+        worker.stop()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
+        lifespan=lifespan,
         title="Walang Pasok API",
         version=__version__,
         description=DESCRIPTION,

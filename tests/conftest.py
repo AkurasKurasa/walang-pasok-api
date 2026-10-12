@@ -6,6 +6,7 @@ from contextlib import nullcontext
 # Configure before the app is imported: tests never touch a real database.
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["ADMIN_API_KEY"] = "test-admin-key"
+os.environ["WATCHER_ENABLED"] = "false"  # no background news checks during tests
 
 import pytest
 from fastapi.testclient import TestClient

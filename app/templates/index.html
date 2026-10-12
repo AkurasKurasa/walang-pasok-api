@@ -40,8 +40,14 @@
         <label for="q" class="mono-label">City or municipality</label>
         <div class="slip-search">
           {# Picking a place submits right away; the button covers browsers without JavaScript. #}
+          {% if static_site %}
+          <select id="q" name="q" required data-places="{{ url('/api/v1/locations/grouped.json') }}" data-base="{{ url('/p/') }}"
+                  onchange="location.href=this.dataset.base+this.value+'/'">
+          {% else %}
           <select id="q" name="q" required onchange="this.form.submit()">
+          {% endif %}
             <option value="" disabled {{ 'selected' if not location }}>Choose your city or municipality</option>
+            {% if static_site and location %}<option value="{{ location.slug }}" selected>{{ location.name }}</option>{% endif %}
             {% for province, places in locality_groups %}
               <optgroup label="{{ province }}">
                 {% for loc in places %}
@@ -50,7 +56,7 @@
               </optgroup>
             {% endfor %}
           </select>
-          <button type="submit" aria-label="Check">
+          <button type="submit" aria-label="Check"{% if static_site %} onclick="var q=document.getElementById('q');if(q.value){location.href=q.dataset.base+q.value+'/'}return false"{% endif %}>
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
           </button>
         </div>
@@ -66,7 +72,7 @@
               <p><strong>Several places match "{{ query }}".</strong> Which one did you mean?</p>
               <ul class="choices">
                 {% for c in choices %}
-                  <li><a href="/?{{ dq }}q={{ c.slug }}">{{ c.name }}</a> <span class="muted">{{ c.province or c.region }}</span></li>
+                  <li><a href="{{ place_url(c.slug) }}">{{ c.name }}</a> <span class="muted">{{ c.province or c.region }}</span></li>
                 {% endfor %}
               </ul>
             {% else %}
@@ -106,15 +112,15 @@
             {% endfor %}
             {{ proof_toggle(featured) }}
           {% else %}
-            <p class="slip-note">Announcements usually come the night before or early in the morning. Check again later, or <a href="#alerts">get a Discord alert</a>.</p>
+            <p class="slip-note">Announcements usually come the night before or early in the morning. Check again later{% if not static_site %}, or <a href="#alerts">get a Discord alert</a>{% endif %}.</p>
           {% endif %}
         {% else %}
           <p class="slip-note">Type your city to get your admit slip for today and bukas.</p>
           <p class="popular"><span class="mono-label">Popular</span>
-            <a href="/?{{ dq }}q=angeles-city">Angeles City</a>
-            <a href="/?{{ dq }}q=mabalacat-city">Mabalacat</a>
-            <a href="/?{{ dq }}q=san-fernando-pampanga">San Fernando</a>
-            <a href="/?{{ dq }}q=quezon-city">Quezon City</a>
+            <a href="{{ place_url('angeles-city') }}">Angeles City</a>
+            <a href="{{ place_url('mabalacat-city') }}">Mabalacat</a>
+            <a href="{{ place_url('san-fernando-pampanga') }}">San Fernando</a>
+            <a href="{{ place_url('quezon-city') }}">Quezon City</a>
           </p>
         {% endif %}
       </div>
@@ -133,7 +139,7 @@
       <p class="eyebrow">Period 1 · Your week</p>
       <h2 class="section-title">Timetable{% if location %}, {{ location.name }}{% endif %}</h2>
     </div>
-    {% if location %}<a class="mono-link" href="/#q">Change city →</a>{% endif %}
+    {% if location %}<a class="mono-link" href="{{ url('/') }}#q">Change city →</a>{% endif %}
   </div>
 
   {% if week %}
@@ -183,10 +189,18 @@
     </div>
     <nav class="chips" aria-label="Filter by island group">
       {% set q_part = dq ~ (('q=' ~ (query | urlencode) ~ '&') if query else '') %}
+      {% if static_site %}
+        {# No server to filter: the buttons hide rows in the page instead. #}
+        <a class="pill is-on" href="#roster" data-island="" aria-current="true">All</a>
+        {% for name in ["luzon", "visayas", "mindanao"] %}
+          <a class="pill" href="#roster" data-island="{{ name }}">{{ name | title }}</a>
+        {% endfor %}
+      {% else %}
       <a class="pill{% if not island %} is-on{% endif %}" href="/?{{ q_part }}#roster"{% if not island %} aria-current="true"{% endif %}>All</a>
       {% for name in ["luzon", "visayas", "mindanao"] %}
         <a class="pill{% if island == name %} is-on{% endif %}" href="/?{{ q_part }}island={{ name }}#roster"{% if island == name %} aria-current="true"{% endif %}>{{ name | title }}</a>
       {% endfor %}
+      {% endif %}
     </nav>
   </div>
 
@@ -198,7 +212,7 @@
           <span class="c">Public</span><span class="c">Private</span><span>Note</span><span>Proof</span>
         </div>
         {% for s in nationwide %}
-          <details class="roster-item">
+          <details class="roster-item" data-island="{{ island_of(s.location) or '' }}">
             <summary class="roster-row">
               <span class="roster-no">{{ '%02d' % loop.index }}</span>
               {% set area = s.location.province or s.location.region %}
@@ -218,14 +232,14 @@
       </div>
     </div>
     {% if nationwide_total > nationwide | length and not island %}
-      <p><a href="/api/v1/suspensions/today?size=100">See all {{ nationwide_total }} in the API</a></p>
+      <p><a href="{{ url('/api/v1/suspensions/today.json') if static_site else '/api/v1/suspensions/today?size=100' }}">See all {{ nationwide_total }} in the API</a></p>
     {% endif %}
   {% elif island %}
     <p class="empty">No verified suspensions in {{ island | title }} {{ 'that day' if archive else 'today' }}.</p>
   {% else %}
     <div class="empty">
       <p>{{ 'No verified suspensions that day.' if archive else 'No verified suspensions today.' }}</p>
-      {% if recent_days %}
+      {% if recent_days and not static_site %}
         <p class="recent-days"><span class="mono-label">Recent days with suspensions</span>
           {% for day, count in recent_days %}
             <a class="pill" href="/?date={{ day.isoformat() }}#roster">{{ day | shortdate }}, {{ day.year }} · {{ count }}</a>
@@ -246,11 +260,15 @@
       <h2 class="section-title">Ask the API. Show your work.</h2>
       <p>One request answers “is there class?” for any city, with the proof attached. Build a Discord bot, a school site widget, or a reminder for your block’s GC.</p>
       <div class="btn-row">
-        <a class="btn btn-white" href="/docs">Read the docs</a>
+        <a class="btn btn-white" href="{{ docs_url() }}">Read the docs</a>
+        {% if static_site %}
+        <a class="btn btn-outline" href="{{ url('/api/v1/suspensions/today.json') }}">Today’s JSON</a>
+        {% else %}
         <a class="btn btn-outline" href="/redoc">API reference</a>
+        {% endif %}
       </div>
     </div>
-    <pre class="worksheet-code"><code><span class="t-pink">GET /api/v1/check?location=angeles-city</span>
+    <pre class="worksheet-code"><code><span class="t-pink">GET {{ url('/api/v1/check/angeles-city.json') if static_site else '/api/v1/check?location=angeles-city' }}</span>
 {
   "suspended": true,
   "date": "{{ today.isoformat() }}",
@@ -263,7 +281,8 @@
   </div>
 </section>
 
-{# ---------- Alerts ---------- #}
+{# ---------- Alerts (needs the server to save sign-ups; not on the static site) ---------- #}
+{% if not static_site %}
 <section id="alerts" class="wrap section">
   <div class="section-head">
     <div>
@@ -292,4 +311,42 @@
     </ol>
   </div>
 </section>
+{% endif %}
+
+{% if static_site %}
+<script>
+/* Static site only: fill the city dropdown from one shared file, and filter the
+   nationwide list by island group without a server. */
+(function () {
+  var q = document.getElementById("q");
+  fetch(q.dataset.places).then(function (r) { return r.json(); }).then(function (groups) {
+    var current = q.value;
+    groups.forEach(function (g) {
+      var og = document.createElement("optgroup");
+      og.label = g.province;
+      g.places.forEach(function (p) {
+        if (p.slug === current) return;
+        var o = document.createElement("option");
+        o.value = p.slug; o.textContent = p.name;
+        og.appendChild(o);
+      });
+      q.appendChild(og);
+    });
+  });
+  document.querySelectorAll(".chips [data-island]").forEach(function (chip) {
+    chip.addEventListener("click", function (e) {
+      e.preventDefault();
+      var want = chip.dataset.island;
+      document.querySelectorAll(".chips [data-island]").forEach(function (c) {
+        c.classList.toggle("is-on", c === chip);
+        if (c === chip) c.setAttribute("aria-current", "true"); else c.removeAttribute("aria-current");
+      });
+      document.querySelectorAll(".roster-item").forEach(function (row) {
+        row.hidden = want !== "" && row.dataset.island !== want;
+      });
+    });
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

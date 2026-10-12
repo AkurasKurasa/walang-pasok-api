@@ -40,7 +40,7 @@ class FakeWeb:
 
 @pytest.fixture
 def seeded(db):
-    """The real 42 seed places (Masantol, San Simon, Sta. Rita, ...)."""
+    """Every PSGC place, so same-named towns (Burgos, San Carlos City) must be told apart."""
     upsert_locations(db)
     return db
 
@@ -83,8 +83,10 @@ def test_imports_the_real_sept_10_article(seeded, web):
 
     sept = article(report, SEPT_10)
     assert sept.status == "imported" and sept.date == dt.date(2026, 9, 10)
-    assert [c.location.slug for c in sept.items] == ["san-simon-pampanga", "santo-tomas-pampanga", "masantol"]
-    assert sept.unmatched == ["Kibungan – no face-to-face classes for daycare"]
+    assert [c.location.slug for c in sept.items] == [
+        "san-simon-pampanga", "santo-tomas-pampanga", "masantol", "kibungan",
+    ]
+    assert sept.unmatched == []
 
     s = seeded.query(Suspension).filter(Suspension.location.has(slug="san-simon-pampanga")).one()
     assert s.status is Status.PENDING  # nothing goes public without a person
@@ -108,8 +110,9 @@ def test_ignores_text_outside_the_article(seeded, web):
 def test_in_person_headline_applies_to_every_line(seeded, web):
     report = run(seeded, web)
 
-    [sta_rita] = article(report, OCT_5).items
-    assert sta_rita.location.slug == "santa-rita-pampanga"
+    items = article(report, OCT_5).items
+    assert {c.mode for c in items} == {Mode.FACE_TO_FACE_ONLY}
+    sta_rita = next(c for c in items if c.location.slug == "santa-rita-pampanga")
     assert sta_rita.mode is Mode.FACE_TO_FACE_ONLY  # "In-person classes suspended Oct. 5 ..."
     assert sta_rita.reason.value == "event"  # Teachers' Day
 
@@ -128,7 +131,7 @@ def test_second_run_does_nothing(seeded, web):
 
     assert {a.status for a in second.articles} == {"unchanged"}
     assert second.new_items == []
-    assert seeded.query(Suspension).count() == 4
+    assert seeded.query(Suspension).count() == 11  # 4 on Sept. 10, 7 on Oct. 5
 
 
 def test_correction_flags_a_dropped_place(seeded, web, outbox):
@@ -136,7 +139,7 @@ def test_correction_flags_a_dropped_place(seeded, web, outbox):
     day_before = dt.date(2026, 10, 4)
     web.pages[OCT_5] = fixture("inquirer_2026-10-05_before_erratum.html")
     first = run(seeded, web, today=day_before)
-    assert {c.location.slug for c in article(first, OCT_5).items} == {"angeles-city", "santa-rita-pampanga"}
+    assert {"angeles-city", "santa-rita-pampanga"} <= {c.location.slug for c in article(first, OCT_5).items}
 
     web.pages[OCT_5] = fixture("inquirer_2026-10-05.html")
     second = run(seeded, web, today=day_before)
@@ -162,14 +165,14 @@ def test_new_source_for_known_suspension_becomes_proof(seeded, web):
 def test_unreachable_feed_is_an_error(seeded):
     report = run(seeded, FakeWeb({}))
 
-    assert report.articles == [] and len(report.errors) == 1
+    assert report.articles == [] and len(report.errors) == len(watcher.SOURCES)  # one per feed
 
 
 def test_admin_summary(seeded, web):
     report = run(seeded, web)
     payload = watcher.admin_summary(report, Settings(public_base_url="https://wp.example"))
 
-    assert payload["content"].startswith("**4 new pending suspension(s)")
+    assert payload["content"].startswith("**11 new pending suspension(s)")
     assert "San Simon" in payload["content"] and "https://wp.example/docs" in payload["content"]
     assert "⚠" in payload["content"]  # San Simon's exception and until-date notes
     assert payload["allowed_mentions"] == {"parse": []}
@@ -191,3 +194,23 @@ def test_robots_txt_is_respected(monkeypatch):
     assert fetcher("https://site.example/news/1") == "ok"
     with pytest.raises(watcher.FetchError, match="robots.txt"):
         fetcher("https://site.example/private/1")
+
+
+def test_unreadable_current_article_is_flagged_for_a_person(seeded, web):
+    """A site that blocks robots must not make its places silently disappear."""
+    del web.pages[SEPT_10]
+
+    report = run(seeded, web)
+
+    assert [a.url for a in report.unreadable] == [SEPT_10]
+    assert report.unreadable[0].date == dt.date(2026, 9, 10)
+    summary = watcher.admin_summary(report, Settings())["content"]
+    assert "Couldn't read" in summary and SEPT_10 in summary
+
+
+def test_unreadable_old_article_is_not_flagged(seeded, web):
+    del web.pages[OCT_5]
+
+    report = run(seeded, web, today=dt.date(2026, 10, 11))
+
+    assert report.unreadable == []

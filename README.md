@@ -226,61 +226,101 @@ day, a second article is added to its **proof** instead of creating a duplicate.
 
 ### The watcher
 
-`python -m scripts.watch` checks news pages, imports new suspension articles as **pending**,
-and reports them to `ADMIN_DISCORD_WEBHOOK_URL`. It remembers what it has read in the
+The watcher checks news pages and imports new suspension articles. **It runs by itself**: the
+web app starts it in the background and repeats it every `WATCH_INTERVAL_MINUTES` (15), and in
+production GitHub Actions runs it (below). It remembers what it has read in the
 `watched_pages` table, so repeated runs only do new work, and it ignores articles about days
-already past. Sources are listed in `app/services/watcher.py`. The first is Inquirer's
-[walang pasok RSS feed](https://newsinfo.inquirer.net/tag/walang-pasok/feed): the feed finds
-new articles, then each article's body (`#article_content`) is read, so sidebars and "read next"
-headlines are never mistaken for suspensions. It identifies itself, obeys robots.txt and waits
-between requests.
+already past. It identifies itself, obeys robots.txt and waits between requests. Sources are
+listed in `app/services/watcher.py`:
+
+| Source | How it's read |
+|---|---|
+| [GMA News](https://data.gmanetwork.com/gno/rss/serbisyopubliko/feed.xml) | Serbisyo Publiko RSS; the article body comes from the page's schema.org JSON-LD (`articleBody`) |
+| [Guro Tayo](https://www.gurotayo.com/) | Blogger RSS; body from `[itemprop=articleBody]`; roundups written as numbered sections |
+| [Inquirer](https://newsinfo.inquirer.net/tag/walang-pasok/feed) | RSS; body from `#article_content`. Currently answers 403 to automated readers |
+
+Only the article body is read, so sidebars and "read next" headlines are never mistaken for
+suspensions. Sites that refuse automated readers (Manila Bulletin, ABS-CBN, The Summit Express's
+robots.txt) are left out on purpose; the watcher never disguises itself.
+
+**LGU posts on Facebook and X.** News lists usually link each place to the LGU's own post. When a
+line's place name links to Facebook, X or a `.gov.ph` site, that post becomes the suspension's
+**official source**, with the article as supporting proof. Facebook itself is never scraped: reading
+other Pages through Meta's API needs Page Public Content Access (an app review), and scraping
+breaks Facebook's terms. For an LGU post no news site has picked up, use
+`scripts.import_article --file` (below).
+
+**Roundups written as sections** ("1. San Jose del Monte City, Bulacan — October 12–14, 2026" and a
+paragraph) only count when the paragraph says classes are suspended. A special non-working day on its
+own, or "does not ... suspension of classes", goes to a person instead. Date ranges in the heading
+become "until lifted" with the right resume day.
+
+**Places.** Every region, province, city and municipality in the PSGC (1,732 places) is loaded from
+the snapshot in `app/data/psgc/`. Same-named towns are told apart by the province written next to
+them or the heading they're under; when that isn't possible the line is left for a person, never
+guessed. Refresh the snapshot with `python -m scripts.seed --locations-only --refresh-psgc`.
 
 **Corrections are caught.** News lists get edited after publishing. Inquirer's Oct. 5, 2026
 list first included Angeles City, then an erratum removed it. When an article the watcher
 already read changes, anything it no longer lists is reported to the admin channel as
 "no longer listed in its source" for a person to check.
 
-Not covered yet: announcements written only as prose (no list), and Facebook-only LGU posts.
+Not covered yet: announcements written only as prose, and LGU posts no news site has linked to.
 Use `scripts.import_article --place` or `--file` for those.
 
-```bash
-python -m scripts.watch          # once
-python -m scripts.watch --loop   # every 15 minutes, on your own computer
-```
+### Hands-off publishing
 
-A person still verifies each suspension. That's what makes it public and sends the alerts:
-a wrong "walang pasok" is worse than a late one.
+Each watcher cycle (`app/services/autopilot.py`) publishes a find on its own, and sends the
+Discord and Facebook alerts, when it is well-sourced and the importer raised no warnings:
 
-### Running it 24/7 for free: GitHub Actions + Neon
+- **It links to the LGU's own post** (Facebook, X or a `.gov.ph` page), or
+- **two different news outlets** list it (it is published on the cycle where the second one appears).
 
-**Shortcut (Windows):** `powershell -ExecutionPolicy Bypass -File scripts\setup_github.ps1`
-does steps 2–4 below for you: it adds the workflows, creates and pushes a public GitHub repo,
-asks for your Neon address and saves it as the `DATABASE_URL` secret, and starts the first run.
-It needs [GitHub CLI](https://cli.github.com) (`winget install --id GitHub.cli -e`).
-The workflows are kept in `deploy/github-workflows/` too, in case they need copying by hand.
+Everything else stays **pending** and is listed in `ADMIN_DISCORD_WEBHOOK_URL` with the reason:
+a single report with no LGU link, a line with exceptions or an unreadable "until" date, or a place
+its source article later dropped. A wrong "walang pasok" is worse than a late one, so those wait for
+a person (`PATCH /api/v1/suspensions/{id}/verify`). `AUTO_PUBLISH=false` holds everything for review.
 
-**The website** deploys to Render's free plan from `render.yaml`: in Render choose
-**New → Blueprint**, pick the repo, and paste the same Neon address as `DATABASE_URL`.
+`python -m scripts.watch` runs one cycle by hand, which you shouldn't normally need.
 
-`.github/workflows/watch.yml` runs the watcher every 15 minutes on GitHub's machines, against
-your hosted database. No server of your own needed.
+### Running it 24/7 for free: GitHub Pages + GitHub Actions + Neon
+
+The whole service runs on GitHub, with no server of your own. `.github/workflows/site.yml`
+(**Update site**) runs every 15 minutes:
+
+1. checks the news and publishes well-sourced suspensions (hands-off publishing, above),
+   sending Discord/Facebook alerts and the admin summary;
+2. rebuilds the website and JSON API as static files (`scripts/build_site.py`);
+3. deploys them to **GitHub Pages**.
+
+GitHub Pages only serves files, so the static site is the same pages rendered ahead of time:
+one page per city or municipality (`/p/angeles-city/`), and the API as JSON files
+(`/api/v1/check/angeles-city.json`, `/api/v1/suspensions/today.json`, `/api/v1/locations.json`),
+documented at `/api/` on the site. Query filters (`?level=college`) and the Discord sign-up form
+need the server, so they're only in the self-hosted version (`uvicorn`, or `render.yaml`).
+
+**Admin without a server:** **Actions → Admin → Run workflow** lists pending suspensions,
+verifies them by id, or imports an announcement you've read yourself (paste an LGU Facebook post's
+link and text). The site is rebuilt right after.
+
+**Setup.** Shortcut (Windows): `powershell -ExecutionPolicy Bypass -File scripts\setup_github.ps1`
+does all of it with [GitHub CLI](https://cli.github.com). By hand:
 
 1. Create a free Postgres database on [Neon](https://neon.tech) and copy its connection
    string (`postgresql://…`; the app adds the driver name itself).
 2. Push this project to a GitHub repository.
-3. In the repo: **Settings → Secrets and variables → Actions**
+3. **Settings → Pages → Source: GitHub Actions.**
+4. **Settings → Secrets and variables → Actions**
    - Secret `DATABASE_URL`: the Neon connection string
-   - Secret `ADMIN_DISCORD_WEBHOOK_URL` (optional): a private channel for "new pending" reports
-   - Variable `SITE_URL` (optional): your website's address. Each run pings it so a free host
-     that sleeps when idle (like Render's free tier) stays awake.
-4. **Actions → Watch for class suspensions → Run workflow** to try it now. After that it runs by itself.
+   - Secret `ADMIN_DISCORD_WEBHOOK_URL` (optional): what was published and what needs review
+   - Secrets `FACEBOOK_PAGE_ID` and `FACEBOOK_PAGE_ACCESS_TOKEN` (optional): post published suspensions to your Page
+5. **Actions → Update site → Run workflow** (tick "load the real examples" the first time).
+   The site is live at `https://<you>.github.io/<repo>/` a few minutes later.
 
-GitHub may start scheduled runs a few minutes late, and in public repos it switches the
-schedule off after 60 days without commits (turn it back on from the Actions tab).
-`.github/workflows/tests.yml` runs the test suite on every push.
-
-To fill the hosted database with the real examples, run once from your computer with
-`DATABASE_URL` set to Neon: `alembic upgrade head` then `python -m scripts.seed`.
+GitHub starts scheduled runs late when it's busy (sometimes by an hour or more), and in public
+repos it switches the schedule off after 60 days without commits (turn it back on in the Actions
+tab). `.github/workflows/tests.yml` runs the test suite on every push. Copies of the workflows
+are kept in `deploy/github-workflows/`.
 
 ---
 

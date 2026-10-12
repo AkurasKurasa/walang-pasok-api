@@ -145,7 +145,9 @@ def is_current(suspension: Suspension, today: dt.date) -> bool:
 
 def site_link(suspension: Suspension, settings: Settings) -> str:
     base = settings.public_base_url.rstrip("/")
-    return f"{base}/?q={urllib.parse.quote(suspension.location.slug)}"
+    slug = urllib.parse.quote(suspension.location.slug)
+    # The static GitHub Pages site has one page per place instead of ?q= search.
+    return f"{base}/p/{slug}/" if settings.static_site_links else f"{base}/?q={slug}"
 
 
 def _scope_lines(s: Suspension) -> list[str]:

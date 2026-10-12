@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["templates/*", "static/*"]
+app = ["templates/*", "static/*", "data/psgc/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

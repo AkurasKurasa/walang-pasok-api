@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 from pydantic import ValidationError
 
 from app.api.deps import DbSession, SessionFactoryDep, Today
@@ -83,6 +84,32 @@ templates.env.filters["posted"] = _time
 templates.env.filters["initials"] = _initials
 templates.env.globals["link_text"] = lambda kind: LINK_TEXT.get(kind, "Open source")
 
+# --- Links that work on the live server and on the static GitHub Pages build ---
+# scripts/build_site.py sets static_site=True and site_base="/<repo>" before rendering.
+templates.env.globals["static_site"] = False
+templates.env.globals["site_base"] = ""
+
+
+def _url(path: str = "/") -> str:
+    """A site path, under the Pages base path when building the static site."""
+    return f"{templates.env.globals['site_base']}{path}"
+
+
+@pass_context
+def _place_url(context, slug: str) -> str:
+    """The page for one place: /?q=slug on the server, /p/slug/ on the static site."""
+    if templates.env.globals["static_site"]:
+        return _url(f"/p/{slug}/")
+    date = f"date={context['today'].isoformat()}&" if context.get("archive") else ""
+    return f"/?{date}q={slug}"
+
+
+def _docs_url() -> str:
+    return _url("/api/") if templates.env.globals["static_site"] else "/docs"
+
+
+templates.env.globals.update(url=_url, place_url=_place_url, docs_url=_docs_url)
+
 NATIONWIDE_LIMIT = 50
 
 # Island group from the first two digits of the PSGC code (the region).
@@ -96,6 +123,9 @@ ISLANDS = {
 def island_of(location: Location) -> str | None:
     prefix = location.psgc_code[:2]
     return next((name for name, codes in ISLANDS.items() if prefix in codes), None)
+
+
+templates.env.globals["island_of"] = island_of
 
 
 def _resolve(db, query: str) -> tuple[Location | None, list[Location]]:
@@ -119,7 +149,9 @@ def _group_by_province(localities: list[Location]) -> list[tuple[str, list[Locat
 
 def _base_context(db) -> dict:
     settings = get_settings()
-    localities = location_service.list_localities(db)
+    # The static build fills the dropdown from one shared JSON file instead of
+    # repeating 1,600+ places in every page.
+    localities = [] if templates.env.globals["static_site"] else location_service.list_localities(db)
     return {
         "updated": _time(clock.now()),
         "localities": localities,

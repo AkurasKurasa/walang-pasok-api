@@ -6,30 +6,35 @@
   <title>{% block title %}May pasok ba bukas? | Walang Pasok{% endblock %}</title>
   <meta name="description" content="Class suspensions in the Philippines, verified against the official announcement and searchable by city.">
   <meta name="theme-color" content="#0062A0">
-  <link rel="icon" href="/favicon.ico" sizes="any">
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ url('/favicon.ico') }}" sizes="any">
+  <link rel="icon" href="{{ url('/static/favicon.svg') }}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ url('/static/apple-touch-icon.png') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   {# display=swap: text shows immediately in a fallback font on slow connections. #}
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Mono:wght@400;500&display=swap">
+  {% if static_site %}
+  {# Static site: one shared, cached stylesheet for all 1,600+ pages. #}
+  <link rel="stylesheet" href="{{ url('/static/style.css') }}">
+  {% else %}
   {# CSS is inlined so the page renders in a single request on slow connections. #}
   <style>{% include "style.css" %}</style>
+  {% endif %}
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="masthead">
     <div class="wrap">
       <div class="masthead-bar">
-        <a href="/" class="logo">
+        <a href="{{ url('/') }}" class="logo">
           <span class="logo-mark" aria-hidden="true"><span class="ink ink-pink"></span><span class="ink ink-yellow"></span></span>
           <span class="logo-word">walang pasok</span>
         </a>
         <nav class="nav" aria-label="Main">
-          <a href="/#week">Timetable</a>
-          <a href="/#roster">Today</a>
-          <a href="/docs">API</a>
-          <a href="/#alerts" class="nav-cta">Get alerts</a>
+          <a href="{{ '' if static_site else '/' }}#week">Timetable</a>
+          <a href="{{ '' if static_site else '/' }}#roster">Today</a>
+          <a href="{{ docs_url() }}">API</a>
+          {% if not static_site %}<a href="/#alerts" class="nav-cta">Get alerts</a>{% endif %}
         </nav>
       </div>
       <div class="masthead-meta">
@@ -45,7 +50,7 @@
     <div class="wrap footer-row">
       <span>walang pasok · made by students, for students</span>
       <span>Only verified announcements are shown. Always confirm with your school or LGU.</span>
-      <span>For developers: <a href="/docs">API documentation</a></span>
+      <span>For developers: <a href="{{ docs_url() }}">API documentation</a></span>
     </div>
   </footer>
 </body>

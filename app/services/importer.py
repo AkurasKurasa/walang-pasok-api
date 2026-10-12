@@ -23,6 +23,7 @@ run every few minutes, and the announcements follow a small set of patterns.
 import datetime as dt
 import re
 import unicodedata
+import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -43,7 +44,7 @@ from app.models import (
     TimeScope,
 )
 from app.models.source import infer_kind
-from app.schemas.suspension import SuspensionCreate
+from app.schemas.suspension import SourceCreate, SuspensionCreate
 from app.services import clock
 from app.services import suspensions as suspension_service
 
@@ -62,8 +63,13 @@ _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link"
 class _TextExtractor(HTMLParser):
     def __init__(self, container_id: str | None = None) -> None:
         super().__init__(convert_charrefs=True)
-        # Only keep text inside the element with this id (a news article's body).
+        # Only keep text inside the element with this id (a news article's body),
+        # or with this attribute when written as "[attr=value]" (e.g. "[itemprop=articleBody]").
         self.container_id = container_id
+        self._container_attr: tuple[str, str] | None = None
+        if container_id and container_id.startswith("[") and "=" in container_id:
+            attr, _, value = container_id.strip("[]").partition("=")
+            self._container_attr = (attr, value)
         self._depth = 0 if container_id else None  # None: keep everything
         self.found_container = False
         self.parts: list[str] = []
@@ -76,7 +82,8 @@ class _TextExtractor(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         if self._depth is not None:
-            if self._depth == 0 and dict(attrs).get("id") == self.container_id:
+            attr, value = self._container_attr or ("id", self.container_id)
+            if self._depth == 0 and dict(attrs).get(attr) == value:
                 self._depth, self.found_container = 1, True
             elif self._depth > 0 and tag not in _VOID_TAGS:
                 self._depth += 1
@@ -315,8 +322,12 @@ def parse_reason(text: str, default: Reason) -> Reason:
     t = text.lower()
     if re.search(r"holiday|non-working", t):
         return Reason.HOLIDAY
-    if re.search(r"fiesta|teachers['’]? day|foundation|celebration|event|anniversary|festival|strike", t):
+    if re.search(r"fiesta|feast|teachers['’]? day|foundation|celebration|event|anniversary|festival|strike", t):
         return Reason.EVENT
+    # Utility outages and bad air aren't weather.
+    if re.search(r"water (?:supply|service)|water interruption|power (?:outage|interruption)|brownout|"
+                 r"air quality|smog|haze|earthquake|lindol", t):
+        return Reason.OTHER
     return default
 
 
@@ -407,6 +418,8 @@ class Candidate:
     lifted_on: dt.date | None = None
     reason: Reason = Reason.WEATHER
     notes: list[str] = field(default_factory=list)
+    # The LGU's own post (Facebook, X, a .gov.ph page) when the article links to it.
+    official_url: str | None = None
     # Filled in by import_parsed:
     action: str | None = None  # "created", "added_source", "already_listed"
     suspension_id: int | None = None
@@ -575,6 +588,109 @@ def parse_whole(
 # --- Saving ------------------------------------------------------------------
 
 
+# --- Roundups written as numbered sections -------------------------------------
+#
+#   1. San Jose del Monte City, Bulacan — October 12–14, 2026
+#   The City Government ... announced the suspension of classes at all levels in
+#   both public and private schools from Monday, October 12, to Wednesday ...
+#
+# Only sections whose paragraph clearly says classes are suspended count. A
+# "special non-working day" alone isn't a class suspension, and "does not ...
+# suspension of classes" is a no.
+
+_SECTION_RE = re.compile(r"^\d{1,2}[.)]\s+(?P<place>[^–—]{2,80}?)\s+[–—-]\s+(?P<when>.+)$")
+_CLASSES_SUSPENDED = re.compile(
+    r"suspen\w*[^.]{0,80}\bclasses\b|\bclasses\b[^.]{0,60}\bsuspend|walang pasok|no classes", re.I
+)
+_NOT_SUSPENDED = re.compile(r"\bnot\b[^.]{0,60}\bsuspen\w*[^.]{0,20}\bclasses\b|\bclasses\b[^.]{0,40}\bwill push through", re.I)
+_DAY_RANGE_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\s*(?:[–-]|to)\s*(\d{1,2})\b", re.I
+)
+_SECTION_BODY_LINES = 6
+# Sentence ends, but not after "No. 60", "Sr.", "Jr.", "St." or "Gov.".
+_SENTENCE_SPLIT = re.compile(r"(?<!\bNo)(?<!\bSr)(?<!\bJr)(?<!\bSt)(?<!\bGov)(?<=\.)\s+(?=[A-Z])")
+
+
+def parse_sections(
+    index: PlaceIndex,
+    text: str,
+    day: dt.date,
+    default_reason: Reason = Reason.WEATHER,
+    default_mode: Mode = Mode.ALL_CLASSES,
+) -> ParseResult:
+    """Suspensions from a roundup written as numbered "N. Place, Province — date" sections."""
+    sections: list[tuple[str, str, list[str]]] = []
+    for line in text.splitlines():
+        m = _SECTION_RE.match(line.strip())
+        if m:
+            sections.append((m.group("place").strip(), m.group("when").strip(), []))
+        elif sections and len(sections[-1][2]) < _SECTION_BODY_LINES:
+            sections[-1][2].append(line.strip())
+
+    candidates: list[Candidate] = []
+    unmatched: list[str] = []
+    seen: set[int] = set()
+    for place, when, body in sections:
+        heading = f"{place} — {when}"
+        loc = _resolve(index, place, None)
+        if loc is None:
+            unmatched.append(heading)
+            continue
+        paragraph = " ".join(body)
+        sentence = next((s for s in _SENTENCE_SPLIT.split(paragraph) if _CLASSES_SUSPENDED.search(s)), None)
+        if _NOT_SUSPENDED.search(paragraph) or sentence is None:
+            unmatched.append(f"{heading}: [holiday or work suspension only; classes not stated as suspended]")
+            continue
+        if loc.id in seen:
+            continue
+        seen.add(loc.id)
+        mode = parse_mode(sentence)
+        candidate = Candidate(
+            line=f"{heading}: {sentence}"[:1000],
+            location=loc,
+            levels=parse_levels(sentence),
+            school_type=parse_school_type(sentence),
+            mode=mode if mode is Mode.FACE_TO_FACE_ONLY else default_mode,
+            time_scope=parse_time_scope(sentence),
+            reason=parse_reason(f"{when} {paragraph}", default_reason),
+        )
+        span = _DAY_RANGE_RE.search(when)
+        if span:
+            end = find_date(f"{span.group(1)} {span.group(3)}", day)
+            if end is not None and end > day:
+                candidate.until_lifted = True
+                candidate.lifted_on = end + dt.timedelta(days=1)  # the day classes resume
+        candidates.append(candidate)
+    return ParseResult(candidates, unmatched)
+
+
+_OFFICIAL_HOSTS = re.compile(
+    r"(^|\.)(facebook\.com|fb\.com|fb\.watch|x\.com|twitter\.com|gov\.ph)$", re.I
+)
+
+
+def is_official_link(url: str) -> bool:
+    """An LGU's own channel: its Facebook or X post, or a government (.gov.ph) site."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return bool(_OFFICIAL_HOSTS.search(host))
+
+
+def attach_official_links(result: ParseResult, links: list[tuple[str, str]]) -> None:
+    """Credit each line to the LGU post it links to.
+
+    News lists often link a place's name to the LGU's announcement:
+    `<a href="facebook.com/...">San Jose del Monte City, Bulacan</a> - All levels`.
+    That post is the official source; the article becomes supporting proof.
+    """
+    official = [(normalize(text), href) for href, text in links if text and is_official_link(href)]
+    for c in result.candidates:
+        line = normalize(c.line)
+        for text, href in official:
+            if len(text) >= 3 and line.startswith(text):
+                c.official_url = href
+                break
+
+
 @dataclass
 class SourceInfo:
     url: str
@@ -598,18 +714,44 @@ def import_parsed(db: Session, result: ParseResult, day: dt.date, source: Source
     one that already exists for that place and day."""
     kind = source.kind or infer_kind(source.url)
     for c in result.candidates:
+        official_name = f"{c.location.name} official post (linked by {source.name})"[:120]
         existing = _existing(db, c.location, day)
         if existing is not None:
             known = {p.url for p in existing.proof}
             if source.url in known:
                 c.action, c.suspension_id = "already_listed", existing.id
                 continue
+            if c.official_url and c.official_url not in known:
+                existing.extra_sources.append(SuspensionSource(
+                    kind=infer_kind(c.official_url), name=official_name, url=c.official_url,
+                ))
             existing.extra_sources.append(
                 SuspensionSource(kind=kind, name=source.name, url=source.url, excerpt=c.line,
                                  posted_at=clock.to_utc(source.posted_at))
             )
+            # One source says "Monday", another "October 12–14": keep the explicit range.
+            if c.until_lifted and c.lifted_on and (
+                not existing.until_lifted or (existing.lifted_on and c.lifted_on > existing.lifted_on)
+            ):
+                existing.until_lifted, existing.lifted_on = True, c.lifted_on
             db.commit()
             c.action, c.suspension_id = "added_source", existing.id
+            continue
+
+        if c.official_url:
+            # The LGU's post is the main source; the article that pointed to it backs it up.
+            created = suspension_service.create(db, SuspensionCreate(
+                location=c.location.slug, date=day, levels=c.levels, school_type=c.school_type,
+                mode=c.mode, time_scope=c.time_scope, until_lifted=c.until_lifted, reason=c.reason,
+                reason_detail=source.reason_detail, source_url=c.official_url, source_name=official_name,
+                source_kind=infer_kind(c.official_url),
+                extra_sources=[SourceCreate(url=source.url, name=source.name, kind=kind,
+                                            excerpt=c.line, posted_at=source.posted_at)],
+            ))
+            if c.lifted_on is not None:
+                created.lifted_on = c.lifted_on
+                db.commit()
+            c.action, c.suspension_id = "created", created.id
             continue
 
         data = SuspensionCreate(

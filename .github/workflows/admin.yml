@@ -1,0 +1,89 @@
+# Admin tasks without a server: Actions > Admin > Run workflow.
+#
+#   list     show pending suspensions and their proof
+#   verify   make suspensions public and send alerts (ids: "12" or "12 15")
+#   import   add an announcement you've read yourself, e.g. an LGU Facebook post:
+#            paste its link and text; it's published right away with that post as proof
+#
+# Afterwards the site is rebuilt so the change shows up within a couple of minutes.
+name: Admin
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What to do"
+        type: choice
+        options: [list, verify, import]
+        default: list
+      ids:
+        description: "verify: suspension ids, separated by spaces"
+        required: false
+      url:
+        description: "import: link to the announcement (Facebook post, LGU page, article)"
+        required: false
+      text:
+        description: "import: the announcement text, copied from the post"
+        required: false
+      date:
+        description: "import: the suspended day, YYYY-MM-DD (blank: read from the text)"
+        required: false
+      place:
+        description: "import: place slug if the text is about one place, e.g. angeles-city"
+        required: false
+
+permissions:
+  contents: read
+  actions: write   # to start the "Update site" workflow afterwards
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  admin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+      FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+      PUBLIC_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+      STATIC_SITE_LINKS: "true"
+      WATCHER_ENABLED: "false"
+      # Inputs go through the environment, never pasted into the shell script.
+      IDS: ${{ inputs.ids }}
+      URL: ${{ inputs.url }}
+      TEXT: ${{ inputs.text }}
+      DAY: ${{ inputs.date }}
+      PLACE: ${{ inputs.place }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install .
+      - run: alembic upgrade head
+      - name: List pending
+        if: ${{ inputs.task == 'list' }}
+        run: python -m scripts.verify --list
+      - name: Verify
+        if: ${{ inputs.task == 'verify' }}
+        run: |
+          if ! [[ "$IDS" =~ ^[0-9\ ]+$ ]]; then echo "::error::ids must be numbers, e.g. 12 15"; exit 1; fi
+          python -m scripts.verify $IDS
+      - name: Import
+        if: ${{ inputs.task == 'import' }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$TEXT" ]; then echo "::error::import needs url and text"; exit 1; fi
+          printf '%s\n' "$TEXT" > announcement.txt
+          args=("$URL" --file announcement.txt --save --verify)
+          [ -n "$DAY" ] && args+=(--date "$DAY")
+          [ -n "$PLACE" ] && args+=(--place "$PLACE")
+          python -m scripts.import_article "${args[@]}"
+      - name: Rebuild the site
+        if: ${{ inputs.task != 'list' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run site.yml -f skip_watch=true

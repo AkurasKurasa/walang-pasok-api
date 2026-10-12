@@ -105,21 +105,28 @@ if ($existing -notcontains "DATABASE_URL") {
 $hook = Read-Host "Optional: a private Discord webhook URL for 'new pending' reports (Enter to skip)"
 if ($hook) { $hook | gh secret set ADMIN_DISCORD_WEBHOOK_URL }
 
-# --- 6. First run ------------------------------------------------------------
-Step "Starting the first watcher run"
+# --- 6. GitHub Pages -----------------------------------------------------------
+Step "Turning on GitHub Pages (deployed by GitHub Actions)"
+$repoPath = (gh repo view --json nameWithOwner --jq .nameWithOwner).Trim()
+gh api "repos/$repoPath/pages" *> $null
+if ($LASTEXITCODE -ne 0) {
+    gh api -X POST "repos/$repoPath/pages" -f build_type=workflow *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Host "  Turn it on by hand: Settings > Pages > Source: GitHub Actions" -ForegroundColor Yellow }
+} else {
+    gh api -X PUT "repos/$repoPath/pages" -f build_type=workflow *> $null
+}
+$pagesUrl = (gh api "repos/$repoPath/pages" --jq .html_url 2>$null)
+
+# --- 7. First run ------------------------------------------------------------
+Step "Starting the first run (check the news, build and publish the site)"
 Start-Sleep -Seconds 3
-gh workflow run watch.yml -f load_examples=true
+gh workflow run site.yml -f load_examples=true
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  GitHub may need a moment to see the new workflow. Start it from the Actions tab:" -ForegroundColor Yellow
-    Write-Host "  Actions > Watch for class suspensions > Run workflow"
+    Write-Host "  Actions > Update site > Run workflow"
 }
 Write-Host "  Watch it live:  $repoUrl/actions"
+if ($pagesUrl) { Write-Host "  Your site:      $pagesUrl  (live after the first run, about 3 minutes)" }
 Write-Host "  From now on it runs by itself every 15 minutes."
-
-Step "Next: put the website online (optional, free)"
-Write-Host "  1. Open https://dashboard.render.com/blueprint/new?repo=$repoUrl"
-Write-Host "  2. Paste the same Neon address as DATABASE_URL, and your site address as PUBLIC_BASE_URL."
-Write-Host "  3. Then add a repo variable SITE_URL (Settings > Secrets and variables > Actions > Variables)"
-Write-Host "     so each watcher run also keeps the free Render site awake:"
-Write-Host "        gh variable set SITE_URL --body https://YOUR-SITE.onrender.com"
+Write-Host "  Admin tasks (verify, import an LGU post): Actions > Admin > Run workflow"
 Write-Host "`nDone." -ForegroundColor Green

@@ -210,3 +210,14 @@ def test_city_dropdown_lists_places_by_province(client, places):
     assert '<optgroup label="Pampanga">' in html
     assert '<option value="angeles-city"' in html
     assert '<optgroup label="Metro Manila">' in html  # NCR cities have no province
+
+
+def test_alert_links_follow_the_hosting_style():
+    from app.config import Settings
+    from app.models import Location, Suspension
+    from app.services import notifications
+
+    s = Suspension(location=Location(slug="angeles-city"))
+    assert notifications.site_link(s, Settings(public_base_url="https://x.example")) == "https://x.example/?q=angeles-city"
+    pages = Settings(public_base_url="https://u.github.io/repo/", static_site_links=True)
+    assert notifications.site_link(s, pages) == "https://u.github.io/repo/p/angeles-city/"

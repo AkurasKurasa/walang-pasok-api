@@ -56,12 +56,12 @@ def test_sept_9_metro_manila_and_pampanga(report):
         "quezon-city", "caloocan-city", "malabon-city", "mandaluyong-city", "manila", "marikina-city",
         "san-juan-city", "valenzuela-city", "pasay-city",
         "san-simon-pampanga", "santo-tomas-pampanga", "angeles-city", "masantol",
+        "kibungan", "mangaldan",  # under the article's Benguet and Pangasinan headings
     }
     assert places["manila"].mode is Mode.FACE_TO_FACE_ONLY  # "no face to face classes"
     assert places["pasay-city"].time_scope is TimeScope.AFTERNOON
     assert places["masantol"].lifted_on == dt.date(2026, 9, 11)  # until Sept. 10
-    # Pangasinan and Benguet towns aren't in the seed list; they're reported, not guessed.
-    assert any(u.startswith("Mangaldan") for u in a.unmatched)
+    assert places["mangaldan"].location.province == "Pangasinan"
 
 
 def test_sept_14_partial_town_goes_to_a_person(report):
@@ -75,18 +75,41 @@ def test_sept_14_partial_town_goes_to_a_person(report):
 def test_oct_5_corrected_list(report):
     a, places = found(report, 2316727)
 
-    assert list(places) == ["santa-rita-pampanga"]  # Angeles City was removed by an erratum
+    assert "angeles-city" not in places  # removed by an erratum
+    assert len(places) == 19
+    # Same-named towns resolved by the province written after them.
+    assert {"san-carlos-city-pangasinan", "burgos-la-union", "victoria-tarlac", "santa-rita-pampanga"} <= set(places)
     assert places["santa-rita-pampanga"].mode is Mode.FACE_TO_FACE_ONLY
+    # A misspelled town ("Malino" for Malinao) is reported, not guessed.
+    assert any(u.startswith("Malino, Albay") for u in a.unmatched)
 
 
-def test_prose_and_school_lists_create_nothing(report):
-    for article_id in (2320427, 2317693, 2313097, 2309211):  # prose, prose, universities, Cebu
+def test_prose_and_school_lists(report):
+    # Prose without a "Place, Province — ..." line, and a story with no date: nothing.
+    for article_id in (2317693, 2309211):
         a = next(a for a in report.articles if f"/{article_id}/" in a.url)
         assert a.items == [], a.title
+    # A dateline that is itself the announcement: "BAYAMBANG, Pangasinan — Onsite classes ... are suspended".
+    _, places = found(report, 2320427)
+    assert list(places) == ["bayambang"]
+    # Universities aren't places; only the province line at the end counts.
+    _, places = found(report, 2313097)
+    assert list(places) == ["albay"]
 
 
 def test_everything_is_pending(report, db):
     from app.models import Status, Suspension
 
-    assert db.query(Suspension).count() == 18  # 13 + 3 + 1 + 1
+    assert db.query(Suspension).count() == 41  # Sept. 9: 15, Sept. 10: 4, Sept. 14: 1, Sept. 29: 1, Oct. 5: 19, Oct. 9: 1
     assert {s.status for s in db.query(Suspension)} == {Status.PENDING}
+
+
+def test_news_dateline_is_not_a_suspension(db):
+    """Inquirer stories open with "MANILA, Philippines —"; that names no suspended place."""
+    from app.models import Reason
+    from app.services import importer
+
+    upsert_locations(db)
+    text = "MANILA, Philippines — Classes at all levels in public schools were discussed by senators."
+    result = importer.parse_text(importer.PlaceIndex.from_db(db), text, dt.date(2026, 10, 12), Reason.WEATHER)
+    assert result.candidates == []

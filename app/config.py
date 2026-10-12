@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     # Timeout for each outgoing Discord/Facebook request, in seconds.
     notify_timeout: float = 10.0
 
+    # Hands-off mode. The web app checks the news on its own every N minutes, and
+    # publishes finds that link to the LGU's own post or that 2+ outlets report.
+    # Everything else waits for a person. Set WATCHER_ENABLED=false where another
+    # process (e.g. GitHub Actions) already runs the watcher against the same database.
+    # Alerts link to /p/<slug>/ (the static GitHub Pages site) instead of /?q=<slug>.
+    static_site_links: bool = False
+
+    watcher_enabled: bool = True
+    watch_interval_minutes: float = 15
+    auto_publish: bool = True
+
     default_page_size: int = 20
     max_page_size: int = 100
 
