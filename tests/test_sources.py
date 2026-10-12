@@ -160,3 +160,30 @@ def test_later_source_with_a_date_range_extends_the_suspension(seeded):
     seeded.refresh(sjdm)
     assert report.articles[0].status == "imported"
     assert sjdm.until_lifted and sjdm.lifted_on == dt.date(2026, 10, 15)
+
+
+def test_guro_tayo_is_read_from_its_feed_without_opening_the_page(seeded):
+    """Blogger rate-limits article pages from GitHub's runners; the feed carries the post."""
+    from xml.sax.saxutils import escape
+
+    html = (FIXTURES / "gurotayo_2026-10-12.html").read_text(encoding="utf-8")
+    body = watcher.read_article(html, GURO_TAYO)  # sanity: the fixture has the sections
+    assert "Mamburao" in body.text
+    start = html.index("itemprop='articleBody'")
+    post = html[html.index(">", start) + 1: html.index("<div class='post-footer", start)]
+    url = "https://www.gurotayo.com/2026/10/walang-pasok-class-suspensions-and.html"
+    feed = (
+        '<?xml version="1.0"?><rss version="2.0"><channel><item>'
+        "<title>WALANG PASOK: Class Suspensions and Special Non-Working Holidays Announced for Monday, October 12, 2026</title>"
+        f"<link>{url}</link><description>{escape(post)}</description></item></channel></rss>"
+    )
+
+    def fetch(u):
+        if u == GURO_TAYO.index_url:
+            return feed
+        raise watcher.FetchError(f"{u}: HTTP Error 429: Too Many Requests")  # the page itself is blocked
+
+    report = watcher.run_once(seeded, fetch, today=dt.date(2026, 10, 11), sources=[GURO_TAYO])
+
+    found = {c.location.slug for c in report.articles[0].items}
+    assert found == {"san-jose-del-monte-city", "mamburao"}

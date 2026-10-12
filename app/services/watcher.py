@@ -59,6 +59,9 @@ class WatchSource:
     # Read the body from the page's schema.org NewsArticle data (JSON-LD
     # "articleBody"), for sites that fill the visible article in with JavaScript.
     ld_json_body: bool = False
+    # Read the article from the RSS item itself (Blogger feeds carry the full post),
+    # for sites that rate-limit article pages from cloud servers.
+    feed_body: bool = False
 
 
 # Add sources here. Before adding one, check that its robots.txt allows it and
@@ -86,6 +89,7 @@ SOURCES: list[WatchSource] = [
         link_pattern=r"^https://www\.gurotayo\.com/\d{4}/\d{2}/[\w-]+\.html$",
         link_text_pattern=r"pasok|suspen",
         content_id="[itemprop=articleBody]",
+        feed_body=True,  # Blogger answers 429 to article requests from GitHub's runners
     ),
 ]
 
@@ -119,6 +123,7 @@ class Listing:
     url: str
     title: str
     published: dt.datetime | None = None
+    body: str | None = None  # the article's HTML, when the feed carries it
 
 
 def read_index(body: str, base_url: str, source: WatchSource) -> list[Listing]:
@@ -133,7 +138,7 @@ def read_index(body: str, base_url: str, source: WatchSource) -> list[Listing]:
                     published = parsedate_to_datetime(item.findtext("pubDate"))
                 except (TypeError, ValueError):
                     published = None
-            items.append(Listing(link, title, published))
+            items.append(Listing(link, title, published, item.findtext("description")))
     else:
         page = importer.html_to_page(body)
         items = [Listing(urllib.parse.urljoin(base_url, href).split("#")[0], text) for href, text in page.links]
@@ -296,7 +301,11 @@ def run_once(
             url = listing.url
             seen = db.scalar(select(WatchedPage).where(WatchedPage.url == url))
             try:
-                page = read_article(fetch(url), source)
+                if source.feed_body and listing.body:
+                    page = importer.html_to_page(listing.body)
+                    page.title = listing.title
+                else:
+                    page = read_article(fetch(url), source)
             except FetchError as exc:
                 near = listing.published.date() if listing.published else today
                 day = headline_date(importer.Page(listing.title, "", []), near)
