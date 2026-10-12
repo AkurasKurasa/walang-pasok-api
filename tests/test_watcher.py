@@ -214,3 +214,36 @@ def test_unreadable_old_article_is_not_flagged(seeded, web):
     report = run(seeded, web, today=dt.date(2026, 10, 11))
 
     assert report.unreadable == []
+
+
+def test_rate_limited_fetch_waits_and_retries(monkeypatch):
+    import email.message
+    import urllib.error
+
+    calls, sleeps = [], []
+    headers = email.message.Message()
+    headers["Retry-After"] = "3"
+
+    class Response:
+        headers = email.message.Message()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            return b"ok"
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", headers, None)
+        return Response()
+
+    monkeypatch.setattr(watcher.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(watcher.time, "sleep", sleeps.append)
+
+    assert watcher.PoliteFetcher(delay=0)._get("https://blog.example/x") == "ok"
+    assert len(calls) == 2 and 3.0 in sleeps

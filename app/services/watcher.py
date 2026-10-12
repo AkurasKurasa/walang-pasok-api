@@ -159,6 +159,14 @@ class FetchError(Exception):
 Fetcher = Callable[[str], str]
 
 
+def _retry_after(header: str | None, default: float = 20.0, cap: float = 60.0) -> float:
+    """Seconds to wait from a Retry-After header (seconds form), within reason."""
+    try:
+        return min(max(float(header), 1.0), cap) if header else default
+    except ValueError:
+        return default
+
+
 class PoliteFetcher:
     """Fetches pages with an honest User-Agent, obeying each site's robots.txt."""
 
@@ -181,7 +189,7 @@ class PoliteFetcher:
         rp = self._robots[root]
         return rp is None or rp.can_fetch(USER_AGENT, url)
 
-    def _get(self, url: str) -> str:
+    def _get(self, url: str, retries: int = 2) -> str:
         wait = self.delay - (time.monotonic() - self._last)
         if wait > 0:
             time.sleep(wait)
@@ -191,6 +199,12 @@ class PoliteFetcher:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 charset = response.headers.get_content_charset() or "utf-8"
                 return response.read(3_000_000).decode(charset, "replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 503) and retries > 0:
+                # Rate-limited (common from shared cloud IPs like GitHub's): wait as asked, then retry.
+                time.sleep(_retry_after(exc.headers.get("Retry-After")))
+                return self._get(url, retries - 1)
+            raise FetchError(f"{url}: {exc}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise FetchError(f"{url}: {exc}") from exc
 

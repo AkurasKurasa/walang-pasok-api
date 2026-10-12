@@ -17,6 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# For scripts/build_site.py (the GitHub Pages build renders pages through the test client).
+site = [
+    "httpx2",
+]
 dev = [
     "pytest>=8.2",
     "httpx2",  # used by Starlette's TestClient
