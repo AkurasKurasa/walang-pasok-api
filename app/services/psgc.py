@@ -31,6 +31,10 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "psgc"
 API_BASE = "https://psgc.gitlab.io/api/"
 FILES = ("regions", "provinces", "cities-municipalities")
 
+# The PSGC has no code for the country itself; this all-zero code is our own.
+COUNTRY_CODE = "0000000000"
+COUNTRY_SLUG = "philippines"
+
 # Names whose "City of ..." form is how people actually say them.
 _KEEP_CITY_OF = {"City of Manila", "City of San Fernando"}
 
@@ -113,12 +117,16 @@ def build(data: dict[str, list[dict]], overrides: dict[str, tuple[str, str]] | N
             return overrides[code]
         return name, make_slug()
 
-    rows: list[PlaceRow] = []
+    # The whole country sits above the regions, so a nationwide holiday covers every place.
+    used.add(COUNTRY_SLUG)
+    rows: list[PlaceRow] = [
+        PlaceRow(COUNTRY_CODE, "Philippines", COUNTRY_SLUG, LocationType.COUNTRY, "Philippines", None, None)
+    ]
 
     for r in data["regions"]:
         code = r["psgc10DigitCode"]
         name, slug = named(code, _region_label(r), lambda: unique(slugify(r["name"])))
-        rows.append(PlaceRow(code, name, slug, LocationType.REGION, _region_label(r), None, None))
+        rows.append(PlaceRow(code, name, slug, LocationType.REGION, _region_label(r), None, COUNTRY_CODE))
 
     locality_slugs = Counter(slugify(display_name(c["name"])) for c in localities)
     for p in data["provinces"]:

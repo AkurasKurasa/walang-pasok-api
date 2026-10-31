@@ -9,6 +9,7 @@ from app.models.base import Base, enum_column
 
 
 class LocationType(StrEnum):
+    COUNTRY = "country"  # the whole Philippines: nationwide holidays and suspensions
     REGION = "region"
     PROVINCE = "province"
     CITY = "city"

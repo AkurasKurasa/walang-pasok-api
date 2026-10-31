@@ -22,6 +22,7 @@ def parent_slug(rows, slug):
 def test_covers_the_whole_country(rows):
     by_slug, _, built = rows
     counts = {t: sum(1 for r in built if r.type is t) for t in LocationType}
+    assert counts[LocationType.COUNTRY] == 1  # "philippines", above the regions
     assert counts[LocationType.REGION] == 17
     assert counts[LocationType.PROVINCE] == 81
     assert counts[LocationType.CITY] + counts[LocationType.MUNICIPALITY] == 1634
