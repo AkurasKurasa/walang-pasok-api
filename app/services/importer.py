@@ -180,6 +180,10 @@ class PlaceIndex:
     def __init__(self, places: Iterable[Location]) -> None:
         self.by_key: dict[str, list[Location]] = {}
         for loc in places:
+            if loc.type is LocationType.COUNTRY:
+                # "MANILA, Philippines —" datelines must never become a nationwide
+                # suspension; national days come from the holiday proclamations only.
+                continue
             keys = _place_keys(loc.name) | _REGION_ALIASES.get(loc.slug, set())
             for key in keys:
                 self.by_key.setdefault(key, []).append(loc)

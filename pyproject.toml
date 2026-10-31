@@ -34,7 +34,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["templates/*", "static/*", "data/psgc/*.json"]
+app = ["templates/*", "static/*", "data/psgc/*.json", "data/holidays/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

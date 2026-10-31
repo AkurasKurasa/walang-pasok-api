@@ -76,6 +76,9 @@ jobs:
       # The watcher can only recognise places that are in the database.
       - name: Load the places (safe to repeat)
         run: python -m scripts.seed --locations-only
+      # National holidays from the yearly proclamation (safe to repeat).
+      - name: Load the national holidays
+        run: python -m scripts.holidays
       - name: Load the real examples
         if: ${{ inputs.load_examples }}
         run: python -m scripts.seed
